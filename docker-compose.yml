@@ -1,0 +1,145 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: gbsb_postgres
+    environment:
+      POSTGRES_USER: gbsb_user
+      POSTGRES_PASSWORD: gbsb_secure_password
+      POSTGRES_DB: gbsb_gurukul
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql
+    networks:
+      - gbsb_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gbsb_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # FastAPI Backend
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gbsb_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      DATABASE_URL: postgresql://gbsb_user:gbsb_secure_password@postgres:5432/gbsb_gurukul
+      JWT_SECRET_KEY: your-secret-key-change-in-production
+      ENVIRONMENT: development
+      OLLAMA_API_URL: http://ollama:11434
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - gbsb_network
+
+  # Ollama AI Service
+  ollama:
+    image: ollama/ollama:latest
+    container_name: gbsb_ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    networks:
+      - gbsb_network
+    # Note: Run this command manually after container starts:
+    # docker exec gbsb_ollama ollama pull mistral
+    # docker exec gbsb_ollama ollama pull llama2
+
+  # Jitsi Meet (Video Conferencing) - Simplified Setup
+  jitsi:
+    image: jitsi/web:stable-8139
+    container_name: gbsb_jitsi
+    environment:
+      XMPP_SERVER: xmpp.meet.jitsi
+      JICOFO_AUTH_TYPE: anonymous
+      ENABLE_AUTH: "0"
+      ENABLE_GUESTS: "1"
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_AUTH_DOMAIN: auth.meet.jitsi
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.meet.jitsi
+      XMPP_MUC_DOMAIN: muc.meet.jitsi
+      TZ: UTC
+    ports:
+      - "8080:80"
+      - "8443:443"
+    networks:
+      - gbsb_network
+    depends_on:
+      - jitsi-prosody
+      - jitsi-jicofo
+
+  # Jitsi Prosody (XMPP Server)
+  jitsi-prosody:
+    image: jitsi/prosody:stable-8139
+    container_name: gbsb_jitsi_prosody
+    environment:
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_AUTH_DOMAIN: auth.meet.jitsi
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.meet.jitsi
+      XMPP_MUC_DOMAIN: muc.meet.jitsi
+      JICOFO_COMPONENT_SECRET: jicofo_secret
+      JVB_AUTH_USER: jvb
+      JVB_AUTH_PASSWORD: jvb_password
+      JIGASI_XMPP_USER: jigasi
+      JIGASI_XMPP_PASSWORD: jigasi_password
+      TURN_SECRET: turn_secret
+      TZ: UTC
+    volumes:
+      - jitsi_prosody_plugins:/prosody-plugins-custom
+    networks:
+      - gbsb_network
+
+  # Jitsi Jicofo (Focus)
+  jitsi-jicofo:
+    image: jitsi/jicofo:stable-8139
+    container_name: gbsb_jitsi_jicofo
+    environment:
+      XMPP_SERVER: jitsi-prosody
+      XMPP_DOMAIN: meet.jitsi
+      XMPP_AUTH_DOMAIN: auth.meet.jitsi
+      XMPP_INTERNAL_MUC_DOMAIN: internal-muc.meet.jitsi
+      JICOFO_COMPONENT_SECRET: jicofo_secret
+      JICOFO_AUTH_USER: focus
+      JICOFO_AUTH_PASSWORD: focus_password
+      TZ: UTC
+    depends_on:
+      - jitsi-prosody
+    networks:
+      - gbsb_network
+
+  # Redis Cache (Optional)
+  redis:
+    image: redis:7-alpine
+    container_name: gbsb_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - gbsb_network
+    command: redis-server --appendonly yes
+
+volumes:
+  postgres_data:
+  ollama_data:
+  redis_data:
+  jitsi_prosody_plugins:
+
+networks:
+  gbsb_network:
+    driver: bridge
